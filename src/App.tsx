@@ -353,6 +353,13 @@ export default function App() {
         return;
       }
       
+      // KEY: Store request token secret in localStorage keyed by token.
+      // The /auth/callback relay page reads it to call /api/auth/complete.
+      // This avoids all server-side session state (works reliably on serverless).
+      if (data.oauthToken && data.oauthTokenSecret) {
+        localStorage.setItem(`oauth_secret_${data.oauthToken}`, data.oauthTokenSecret);
+      }
+
       window.open(data.url, 'smugmug_oauth', 'width=600,height=700');
     } catch (error) {
       toast.error("Failed to initiate connection");

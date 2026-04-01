@@ -25,27 +25,17 @@ const getCredentials = (req) => {
   const headers = req.headers || {};
 
   const rawApiKey = (
-    headers["x-smugmug-api-key"] ||
-    body.apiKey ||
-    query.apiKey ||
-    DEFAULT_SMUGMUG_API_KEY ||
-    ""
+    headers["x-smugmug-api-key"] || body.apiKey || query.apiKey || DEFAULT_SMUGMUG_API_KEY || ""
   ).toString().trim();
 
   const rawApiSecret = (
-    headers["x-smugmug-api-secret"] ||
-    body.apiSecret ||
-    query.apiSecret ||
-    DEFAULT_SMUGMUG_API_SECRET ||
-    ""
+    headers["x-smugmug-api-secret"] || body.apiSecret || query.apiSecret || DEFAULT_SMUGMUG_API_SECRET || ""
   ).toString().trim();
 
   const apiKey = (rawApiKey === "undefined" || rawApiKey === "null") ? "" : rawApiKey;
-  // If frontend passes "__server__" sentinel, use server-side secret
-  const rawSecret = (rawApiSecret === "undefined" || rawApiSecret === "null" || rawApiSecret === "__server__") 
-    ? DEFAULT_SMUGMUG_API_SECRET 
+  const apiSecret = (rawApiSecret === "undefined" || rawApiSecret === "null" || rawApiSecret === "__server__")
+    ? DEFAULT_SMUGMUG_API_SECRET
     : rawApiSecret;
-  const apiSecret = rawSecret.toString().trim();
 
   return { apiKey, apiSecret };
 };
@@ -68,23 +58,18 @@ export default async function handler(req, res) {
   }
 
   const oauth = getOauth(apiKey, apiSecret);
-
-  // Callback URL — we'll embed oauth_token_secret after we get it from SmugMug
-  // For now build base callback with credentials
-  const baseCallbackUrl = `${APP_URL}/auth/callback?apiKey=${encodeURIComponent(apiKey)}&apiSecret=${encodeURIComponent(apiSecret)}`;
+  const callbackUrl = `${APP_URL}/auth/callback?apiKey=${encodeURIComponent(apiKey)}&apiSecret=${encodeURIComponent(apiSecret)}`;
 
   const request_data = {
     url: "https://api.smugmug.com/services/oauth/1.0a/getRequestToken",
     method: "POST",
-    data: { oauth_callback: baseCallbackUrl },
+    data: { oauth_callback: callbackUrl },
   };
 
   try {
     const authData = oauth.authorize(request_data);
     const bodyParams = new URLSearchParams();
-    for (const key in authData) {
-      bodyParams.append(key, authData[key]);
-    }
+    for (const key in authData) bodyParams.append(key, authData[key]);
 
     const response = await axios.post(request_data.url, bodyParams.toString(), {
       headers: {
@@ -109,16 +94,12 @@ export default async function handler(req, res) {
       throw new Error(`Failed to get tokens. Data: ${JSON.stringify(response.data)}`);
     }
 
-    // KEY FIX: Store oauth_token_secret in a short-lived cookie.
-    // The browser will send this cookie when SmugMug redirects back to /auth/callback.
-    // SameSite=Lax allows it to be sent on top-level cross-site navigations (the OAuth redirect).
-    res.setHeader("Set-Cookie", [
-      `oauth_token_secret=${encodeURIComponent(oauth_token_secret)}; Path=/; Max-Age=600; SameSite=Lax; Secure; HttpOnly`,
-      `sm_api_key=${encodeURIComponent(apiKey)}; Path=/; Max-Age=600; SameSite=Lax; Secure; HttpOnly`,
-    ]);
-
     const authorizeUrl = `https://api.smugmug.com/services/oauth/1.0a/authorize?oauth_token=${oauth_token}&Access=Full&Permissions=Read`;
-    res.json({ url: authorizeUrl });
+
+    // Return BOTH the authorize URL and the token secret to the frontend.
+    // The frontend stores the secret in localStorage keyed by oauth_token,
+    // so the client-side callback relay page can retrieve it without server sessions.
+    res.json({ url: authorizeUrl, oauthToken: oauth_token, oauthTokenSecret: oauth_token_secret });
   } catch (error) {
     const errorData = error.response?.data || error.message;
     const errorStr = typeof errorData === "string" ? errorData : JSON.stringify(errorData);

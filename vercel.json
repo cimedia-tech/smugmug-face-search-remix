@@ -7,6 +7,7 @@
     { "source": "/api/config", "destination": "/api/config.js" },
     { "source": "/api/auth/url", "destination": "/api/auth/url.js" },
     { "source": "/api/auth/callback", "destination": "/api/auth/callback.js" },
+    { "source": "/api/auth/complete", "destination": "/api/auth/complete.js" },
     { "source": "/api/smugmug/:path*", "destination": "/api/smugmug/[...slug].js" },
     { "source": "/api/proxy-image", "destination": "/api/proxy-image.js" },
     { "source": "/auth/callback", "destination": "/api/auth/callback.js" }
