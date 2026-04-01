@@ -4,6 +4,7 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "rewrites": [
+    { "source": "/api/config", "destination": "/api/config.js" },
     { "source": "/api/auth/url", "destination": "/api/auth/url.js" },
     { "source": "/api/auth/callback", "destination": "/api/auth/callback.js" },
     { "source": "/api/smugmug/:path*", "destination": "/api/smugmug/[...slug].js" },

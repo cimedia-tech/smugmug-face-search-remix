@@ -199,6 +199,33 @@ export default function App() {
 
   const hasInitialLoaded = React.useRef(false);
 
+  // Auto-load server-side keys if no local keys exist
+  useEffect(() => {
+    const loadServerConfig = async () => {
+      try {
+        const res = await fetch("/api/config");
+        if (!res.ok) return;
+        const config = await res.json();
+        if (config.hasServerKeys && config.smugmugApiKey) {
+          const existingKey = getStoredValue("sm_api_key");
+          if (!existingKey) {
+            // Server has keys pre-configured — store API key locally
+            // API secret stays server-side only (used by proxy functions)
+            setStoredValue("sm_api_key", config.smugmugApiKey);
+            setApiKey(config.smugmugApiKey);
+            // Use a sentinel so the server-side secret is used
+            setStoredValue("sm_api_secret", "__server__");
+            setApiSecret("__server__");
+            console.log("Loaded API key from server config");
+          }
+        }
+      } catch (e) {
+        // Silently fail — user can enter keys manually
+      }
+    };
+    loadServerConfig();
+  }, []);
+
   useEffect(() => {
     if (hasInitialLoaded.current) return;
     hasInitialLoaded.current = true;
