@@ -6,10 +6,6 @@ const DEFAULT_SMUGMUG_API_KEY = (process.env.SMUGMUG_API_KEY || "").trim();
 const DEFAULT_SMUGMUG_API_SECRET = (process.env.SMUGMUG_API_SECRET || "").trim();
 const APP_URL = (process.env.APP_URL || "").replace(/\/$/, "");
 
-// In-memory store for serverless (per-invocation, short-lived)
-// For production use, consider Redis/KV store for multi-instance
-const oauthSecrets = new Map();
-
 const getOauth = (apiKey, apiSecret) => {
   return new OAuth({
     consumer: {
@@ -45,14 +41,18 @@ const getCredentials = (req) => {
   ).toString().trim();
 
   const apiKey = (rawApiKey === "undefined" || rawApiKey === "null") ? "" : rawApiKey;
-  const apiSecret = (rawApiSecret === "undefined" || rawApiSecret === "null") ? "" : rawApiSecret;
+  // If frontend passes "__server__" sentinel, use server-side secret
+  const rawSecret = (rawApiSecret === "undefined" || rawApiSecret === "null" || rawApiSecret === "__server__") 
+    ? DEFAULT_SMUGMUG_API_SECRET 
+    : rawApiSecret;
+  const apiSecret = rawSecret.toString().trim();
 
   return { apiKey, apiSecret };
 };
 
 export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", APP_URL || "*");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-smugmug-api-key, x-smugmug-api-secret");
 
@@ -68,22 +68,25 @@ export default async function handler(req, res) {
   }
 
   const oauth = getOauth(apiKey, apiSecret);
-  const callbackUrl = `${APP_URL}/auth/callback?apiKey=${encodeURIComponent(apiKey)}&apiSecret=${encodeURIComponent(apiSecret)}`;
+
+  // Callback URL — we'll embed oauth_token_secret after we get it from SmugMug
+  // For now build base callback with credentials
+  const baseCallbackUrl = `${APP_URL}/auth/callback?apiKey=${encodeURIComponent(apiKey)}&apiSecret=${encodeURIComponent(apiSecret)}`;
 
   const request_data = {
     url: "https://api.smugmug.com/services/oauth/1.0a/getRequestToken",
     method: "POST",
-    data: { oauth_callback: callbackUrl },
+    data: { oauth_callback: baseCallbackUrl },
   };
 
   try {
     const authData = oauth.authorize(request_data);
-    const body = new URLSearchParams();
+    const bodyParams = new URLSearchParams();
     for (const key in authData) {
-      body.append(key, authData[key]);
+      bodyParams.append(key, authData[key]);
     }
 
-    const response = await axios.post(request_data.url, body.toString(), {
+    const response = await axios.post(request_data.url, bodyParams.toString(), {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json, text/plain, */*",
@@ -106,15 +109,23 @@ export default async function handler(req, res) {
       throw new Error(`Failed to get tokens. Data: ${JSON.stringify(response.data)}`);
     }
 
+    // KEY FIX: Store oauth_token_secret in a short-lived cookie.
+    // The browser will send this cookie when SmugMug redirects back to /auth/callback.
+    // SameSite=Lax allows it to be sent on top-level cross-site navigations (the OAuth redirect).
+    res.setHeader("Set-Cookie", [
+      `oauth_token_secret=${encodeURIComponent(oauth_token_secret)}; Path=/; Max-Age=600; SameSite=Lax; Secure; HttpOnly`,
+      `sm_api_key=${encodeURIComponent(apiKey)}; Path=/; Max-Age=600; SameSite=Lax; Secure; HttpOnly`,
+    ]);
+
     const authorizeUrl = `https://api.smugmug.com/services/oauth/1.0a/authorize?oauth_token=${oauth_token}&Access=Full&Permissions=Read`;
-    res.json({ url: authorizeUrl, oauth_token, oauth_token_secret });
+    res.json({ url: authorizeUrl });
   } catch (error) {
     const errorData = error.response?.data || error.message;
     const errorStr = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
 
     let userMessage = "Failed to initiate OAuth flow.";
     if (errorStr.includes("consumer_key_unknown")) {
-      userMessage = `Invalid SmugMug API Key.`;
+      userMessage = "Invalid SmugMug API Key. Please check your credentials in Settings.";
     } else if (errorStr.includes("signature_invalid")) {
       userMessage = "OAuth signature mismatch. Please verify your API Secret.";
     }
