@@ -3,12 +3,11 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm install",
-  "routes": [
-    { "src": "/api/auth/url", "dest": "/api/auth/url.js" },
-    { "src": "/api/auth/callback", "dest": "/api/auth/callback.js" },
-    { "src": "/api/smugmug/(.*)", "dest": "/api/smugmug/[...slug].js" },
-    { "src": "/api/proxy-image", "dest": "/api/proxy-image.js" },
-    { "src": "/auth/callback", "dest": "/api/auth/callback.js" },
-    { "src": "/(.*)", "dest": "/index.html" }
+  "rewrites": [
+    { "source": "/api/auth/url", "destination": "/api/auth/url.js" },
+    { "source": "/api/auth/callback", "destination": "/api/auth/callback.js" },
+    { "source": "/api/smugmug/:path*", "destination": "/api/smugmug/[...slug].js" },
+    { "source": "/api/proxy-image", "destination": "/api/proxy-image.js" },
+    { "source": "/auth/callback", "destination": "/api/auth/callback.js" }
   ]
 }
