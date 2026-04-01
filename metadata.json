@@ -1,0 +1,7 @@
+{
+  "name": "Remix: SmugMug Face Search",
+  "description": "A professional, cloud-based tool to search for faces across your SmugMug galleries using advanced AI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
