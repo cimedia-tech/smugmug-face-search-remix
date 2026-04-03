@@ -1,13 +1,9 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import type { FaceMatchResult } from "@/src/types";
+
+export type { FaceMatchResult };
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-
-export interface FaceMatchResult {
-  imageId: string;
-  isMatch: boolean;
-  confidence: number;
-  reasoning?: string;
-}
 
 export const gemini = {
   async compareFaces(referenceImageBase64: string, candidateImages: { id: string, base64: string }[]): Promise<FaceMatchResult[]> {

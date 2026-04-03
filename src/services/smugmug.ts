@@ -1,43 +1,7 @@
 import axios from "axios";
+import type { SmugMugUser, SmugMugGallery, SmugMugImage, SmugMugCredentials } from "@/src/types";
 
-export interface SmugMugUser {
-  NickName: string;
-  RealName: string;
-  WebUri: string;
-  Uri?: string;
-  Uris?: {
-    Galleries?: {
-      Uri: string;
-    }
-  };
-  Galleries?: SmugMugGallery[];
-}
-
-export interface SmugMugGallery {
-  Name: string;
-  Uri: string;
-  WebUri: string;
-  Uris?: {
-    GalleryImages?: {
-      Uri: string;
-    }
-  }
-}
-
-export interface SmugMugImage {
-  FileName: string;
-  ThumbnailUrl: string;
-  LargeImageUrl: string;
-  Uri: string;
-  WebUri: string;
-}
-
-export interface SmugMugCredentials {
-  apiKey: string;
-  apiSecret: string;
-  accessToken?: string;
-  accessTokenSecret?: string;
-}
+export type { SmugMugUser, SmugMugGallery, SmugMugImage, SmugMugCredentials };
 
 const getAuthHeaders = (creds?: SmugMugCredentials) => {
   if (!creds) return { "Accept": "application/json" };
