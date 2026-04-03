@@ -1,25 +1,42 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { doc, getDoc, setDoc, deleteField, updateDoc } from "firebase/firestore";
+import type { User } from "firebase/auth";
+import { db } from "@/src/lib/firebase";
 import { smugmug } from "@/src/services/smugmug";
 import type { SmugMugUser, SmugMugGallery, SmugMugCredentials } from "@/src/types";
 
-// --- Storage helpers (cookie + localStorage fallback for iframe compat) ---
+// --- Firestore helpers ---
 
-export function getStoredValue(name: string): string {
-  const cookieValue = `; ${document.cookie}`.split(`; ${name}=`).pop()?.split(";").shift();
-  if (cookieValue) return cookieValue;
-  return localStorage.getItem(name) || "";
+async function loadCredentialsFromFirestore(uid: string): Promise<Partial<SmugMugCredentials>> {
+  const snap = await getDoc(doc(db, "users", uid));
+  if (!snap.exists()) return {};
+  const data = snap.data();
+  return {
+    apiKey: data.smugmugApiKey ?? "",
+    apiSecret: data.smugmugApiSecret ?? "",
+    accessToken: data.smugmugAccessToken ?? "",
+    accessTokenSecret: data.smugmugAccessTokenSecret ?? "",
+  };
 }
 
-export function setStoredValue(name: string, value: string): void {
-  document.cookie = `${name}=${value}; path=/; max-age=${30 * 24 * 60 * 60}; SameSite=None; Secure`;
-  localStorage.setItem(name, value);
+async function saveCredentialsToFirestore(uid: string, creds: SmugMugCredentials) {
+  await setDoc(
+    doc(db, "users", uid),
+    {
+      smugmugApiKey: creds.apiKey,
+      smugmugApiSecret: creds.apiSecret,
+      smugmugAccessToken: creds.accessToken ?? "",
+      smugmugAccessTokenSecret: creds.accessTokenSecret ?? "",
+    },
+    { merge: true }
+  );
 }
 
-function clearStoredTokens() {
-  ["sm_access_token", "sm_access_token_secret"].forEach((key) => {
-    document.cookie = `${key}=; path=/; max-age=0`;
-    localStorage.removeItem(key);
+async function clearTokensInFirestore(uid: string) {
+  await updateDoc(doc(db, "users", uid), {
+    smugmugAccessToken: deleteField(),
+    smugmugAccessTokenSecret: deleteField(),
   });
 }
 
@@ -38,7 +55,7 @@ export interface AuthState {
   checkAuth: (overrideCreds?: Partial<SmugMugCredentials>) => Promise<void>;
 }
 
-export function useAuth(): AuthState {
+export function useAuth(firebaseUser: User | null): AuthState {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<SmugMugUser | null>(null);
@@ -50,23 +67,17 @@ export function useAuth(): AuthState {
     accessTokenSecret: "",
   });
 
-  const setCredentials = (partial: Partial<SmugMugCredentials>) => {
+  const setCredentials = (partial: Partial<SmugMugCredentials>) =>
     setCredentialsState((prev) => ({ ...prev, ...partial }));
-  };
 
   const checkAuth = useCallback(
     async (overrideCreds?: Partial<SmugMugCredentials>) => {
-      const apiKey = overrideCreds?.apiKey ?? credentials.apiKey ?? getStoredValue("sm_api_key");
-      const apiSecret = overrideCreds?.apiSecret ?? credentials.apiSecret ?? getStoredValue("sm_api_secret");
-      const accessToken = overrideCreds?.accessToken ?? credentials.accessToken ?? getStoredValue("sm_access_token");
-      const accessTokenSecret = overrideCreds?.accessTokenSecret ?? credentials.accessTokenSecret ?? getStoredValue("sm_access_token_secret");
+      const apiKey = overrideCreds?.apiKey ?? credentials.apiKey;
+      const apiSecret = overrideCreds?.apiSecret ?? credentials.apiSecret;
+      const accessToken = overrideCreds?.accessToken ?? credentials.accessToken;
+      const accessTokenSecret = overrideCreds?.accessTokenSecret ?? credentials.accessTokenSecret;
 
-      if (!accessToken || accessToken === "undefined" || accessToken === "null") {
-        setIsLoading(false);
-        setIsAuthenticated(false);
-        return;
-      }
-      if (!apiKey || !apiSecret) {
+      if (!accessToken || !apiKey || !apiSecret) {
         setIsLoading(false);
         setIsAuthenticated(false);
         return;
@@ -82,10 +93,10 @@ export function useAuth(): AuthState {
         setIsAuthenticated(true);
         setIsLoading(false);
 
-        if (overrideCreds?.accessToken) {
-          setStoredValue("sm_access_token", accessToken);
-          setStoredValue("sm_access_token_secret", accessTokenSecret);
+        // Persist override tokens to Firestore
+        if (overrideCreds?.accessToken && firebaseUser) {
           setCredentials({ accessToken, accessTokenSecret });
+          await saveCredentialsToFirestore(firebaseUser.uid, creds);
         }
 
         // Fetch galleries in background
@@ -93,9 +104,10 @@ export function useAuth(): AuthState {
           if (userData.Galleries) {
             setGalleries(userData.Galleries);
           } else {
-            const galleriesUri =
-              userData.Uris?.Galleries?.Uri ?? (userData.Uri ? `${userData.Uri}!galleries` : userData.NickName);
-            const galleryData = await smugmug.getGalleries(galleriesUri, creds);
+            const uri =
+              userData.Uris?.Galleries?.Uri ??
+              (userData.Uri ? `${userData.Uri}!galleries` : userData.NickName);
+            const galleryData = await smugmug.getGalleries(uri, creds);
             setGalleries(galleryData || []);
           }
         } catch (err: any) {
@@ -105,41 +117,41 @@ export function useAuth(): AuthState {
         const msg = error.response?.data?.Message || error.message || "Authentication failed";
         if (error.response?.status === 401 || error.response?.status === 404) {
           toast.error("SmugMug session expired. Please reconnect.");
-          clearStoredTokens();
+          if (firebaseUser) await clearTokensInFirestore(firebaseUser.uid);
           setCredentials({ accessToken: "", accessTokenSecret: "" });
           setIsAuthenticated(false);
         } else {
           toast.error(`Connection error: ${msg}`);
         }
-      } finally {
         setIsLoading(false);
       }
     },
-    [credentials]
+    [credentials, firebaseUser]
   );
 
-  const saveSettings = () => {
+  const saveSettings = async () => {
     setIsLoading(true);
-    setStoredValue("sm_api_key", credentials.apiKey ?? "");
-    setStoredValue("sm_api_secret", credentials.apiSecret ?? "");
+    if (firebaseUser) {
+      await saveCredentialsToFirestore(firebaseUser.uid, credentials);
+    }
     toast.success("Settings saved");
     checkAuth();
   };
 
   const handleConnect = async () => {
-    const apiKey = credentials.apiKey || getStoredValue("sm_api_key");
-    const apiSecret = credentials.apiSecret || getStoredValue("sm_api_secret");
+    const apiKey = credentials.apiKey;
+    const apiSecret = credentials.apiSecret;
 
     if (!apiKey || !apiSecret) {
       toast.error("Please enter your SmugMug API Key and Secret first.");
       return;
     }
 
-    setStoredValue("sm_api_key", apiKey);
-    setStoredValue("sm_api_secret", apiSecret);
-    setCredentials({ apiKey, apiSecret });
-    setIsLoading(true);
+    if (firebaseUser) {
+      await saveCredentialsToFirestore(firebaseUser.uid, credentials);
+    }
 
+    setIsLoading(true);
     try {
       const response = await fetch("/api/auth/url", {
         method: "POST",
@@ -165,8 +177,8 @@ export function useAuth(): AuthState {
     }
   };
 
-  const handleDisconnect = () => {
-    clearStoredTokens();
+  const handleDisconnect = async () => {
+    if (firebaseUser) await clearTokensInFirestore(firebaseUser.uid);
     setCredentials({ accessToken: "", accessTokenSecret: "" });
     setIsAuthenticated(false);
     setUser(null);
@@ -175,53 +187,62 @@ export function useAuth(): AuthState {
 
   const hasInitialLoaded = useRef(false);
 
-  // Boot: load server config, restore session, set up OAuth listeners
+  // When Firebase user changes, load their credentials from Firestore
   useEffect(() => {
+    if (!firebaseUser) {
+      setIsAuthenticated(false);
+      setIsLoading(false);
+      setUser(null);
+      setGalleries([]);
+      return;
+    }
+
     if (hasInitialLoaded.current) return;
     hasInitialLoaded.current = true;
 
-    // Try loading pre-configured server keys
-    const loadServerConfig = async () => {
+    setIsLoading(true);
+
+    const boot = async () => {
+      // Try loading server-side pre-configured keys first
       try {
         const res = await fetch("/api/config");
-        if (!res.ok) return;
-        const config = await res.json();
-        if (config.hasServerKeys && config.smugmugApiKey && !getStoredValue("sm_api_key")) {
-          setStoredValue("sm_api_key", config.smugmugApiKey);
-          setStoredValue("sm_api_secret", "__server__");
-          setCredentials({ apiKey: config.smugmugApiKey, apiSecret: "__server__" });
+        if (res.ok) {
+          const config = await res.json();
+          if (config.hasServerKeys && config.smugmugApiKey) {
+            const snap = await getDoc(doc(db, "users", firebaseUser.uid));
+            if (!snap.exists() || !snap.data()?.smugmugApiKey) {
+              await saveCredentialsToFirestore(firebaseUser.uid, {
+                apiKey: config.smugmugApiKey,
+                apiSecret: "__server__",
+                accessToken: "",
+                accessTokenSecret: "",
+              });
+            }
+          }
         }
       } catch {
-        // Silently fail — user can enter keys manually
+        // silently ignore
       }
-    };
 
-    loadServerConfig().then(() => {
-      const storedApiKey = getStoredValue("sm_api_key");
-      const storedApiSecret = getStoredValue("sm_api_secret");
-      const storedAccessToken = getStoredValue("sm_access_token");
-      const storedAccessTokenSecret = getStoredValue("sm_access_token_secret");
+      // Load credentials from Firestore
+      const stored = await loadCredentialsFromFirestore(firebaseUser.uid);
+      const merged = { apiKey: "", apiSecret: "", accessToken: "", accessTokenSecret: "", ...stored };
+      setCredentialsState(merged);
 
-      setCredentialsState({
-        apiKey: storedApiKey,
-        apiSecret: storedApiSecret,
-        accessToken: storedAccessToken,
-        accessTokenSecret: storedAccessTokenSecret,
-      });
-
-      if (storedAccessToken && storedAccessToken !== "undefined" && storedAccessToken !== "null") {
-        checkAuth({
-          apiKey: storedApiKey,
-          apiSecret: storedApiSecret,
-          accessToken: storedAccessToken,
-          accessTokenSecret: storedAccessTokenSecret,
-        });
+      if (merged.accessToken) {
+        checkAuth(merged);
       } else {
         setIsLoading(false);
       }
-    });
+    };
 
-    // postMessage listener (OAuth popup success)
+    boot();
+  }, [firebaseUser]);
+
+  // OAuth popup listener
+  useEffect(() => {
+    if (!firebaseUser) return;
+
     const handleMessage = (event: MessageEvent) => {
       if (event.data?.type !== "OAUTH_AUTH_SUCCESS") return;
       const { accessToken, accessTokenSecret } = event.data;
@@ -229,19 +250,11 @@ export function useAuth(): AuthState {
         toast.error("Connection failed: missing tokens");
         return;
       }
-      setStoredValue("sm_access_token", accessToken);
-      setStoredValue("sm_access_token_secret", accessTokenSecret);
       setCredentials({ accessToken, accessTokenSecret });
-      checkAuth({
-        accessToken,
-        accessTokenSecret,
-        apiKey: getStoredValue("sm_api_key"),
-        apiSecret: getStoredValue("sm_api_secret"),
-      });
+      checkAuth({ ...credentials, accessToken, accessTokenSecret });
       toast.success("Successfully connected to SmugMug");
     };
 
-    // localStorage poll fallback (for when postMessage is blocked by iframe)
     const pollInterval = setInterval(() => {
       try {
         const raw = localStorage.getItem("sm_oauth_result");
@@ -251,15 +264,13 @@ export function useAuth(): AuthState {
           localStorage.removeItem("sm_oauth_result");
           const { accessToken, accessTokenSecret } = result;
           if (accessToken && accessTokenSecret) {
-            setStoredValue("sm_access_token", accessToken);
-            setStoredValue("sm_access_token_secret", accessTokenSecret);
             setCredentials({ accessToken, accessTokenSecret });
-            checkAuth({ accessToken, accessTokenSecret });
+            checkAuth({ ...credentials, accessToken, accessTokenSecret });
             toast.success("Successfully connected to SmugMug");
           }
         }
       } catch {
-        // ignore parse errors
+        // ignore
       }
     }, 2000);
 
@@ -268,7 +279,7 @@ export function useAuth(): AuthState {
       window.removeEventListener("message", handleMessage);
       clearInterval(pollInterval);
     };
-  }, [checkAuth]);
+  }, [firebaseUser, credentials, checkAuth]);
 
   return {
     isAuthenticated,
